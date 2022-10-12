@@ -4,10 +4,12 @@ FROM #subscriptions
 
 -- 2. What is the monthly distribution of trial plan start_date values for our dataset - use the start of the month as the group by value
 SELECT MONTH(start_date) AS start_month,
+       DATENAME(Month, start_date) AS month_name,
        COUNT(DISTINCT customer_id) AS customer_count
 FROM #subscriptions
 WHERE plan_id = 0
-GROUP BY MONTH(start_date)
+GROUP BY MONTH(start_date), DATENAME(Month, start_date)
+ORDER BY MONTH(start_date)
 
 -- 3. What plan start_date values occur after the year 2020 for our dataset? Show the breakdown by count of events for each plan_name
 SELECT s.plan_id,
@@ -37,7 +39,7 @@ WHERE plan_order = 2
 -- 6. What is the number and percentage of customer plans after their initial free trial?
 SELECT p.plan_name,
        COUNT(*) AS customer_count,
-       ROUND(COUNT(*) / CAST((SELECT COUNT(DISTINCT customer_id) FROM #subscriptions) AS FLOAT) * 100,0) AS customer_percentage
+       COUNT(*) / CAST((SELECT COUNT(DISTINCT customer_id) FROM #subscriptions) AS FLOAT) * 100 AS customer_percentage
 FROM(
 SELECT plan_id, 
        ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY start_date) AS plan_order
@@ -45,12 +47,14 @@ FROM #subscriptions) t
 JOIN #plans p
   ON t.plan_id = p.plan_id
 WHERE plan_order = 2
-GROUP BY p.plan_name
+GROUP BY p.plan_name, p.plan_id
+ORDER BY p.plan_id
 
 -- 7. What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
-SELECT p.plan_name,
+SELECT p.plan_id,
+       p.plan_name,     
        COUNT(*) AS customer_count,
-       ROUND(COUNT(*) / CAST((SELECT COUNT(DISTINCT customer_id) FROM #subscriptions) AS FLOAT) * 100,0) AS customer_churn_percentage
+       COUNT(*) / CAST((SELECT COUNT(DISTINCT customer_id) FROM #subscriptions) AS FLOAT) * 100 AS customer_churn_percentage
 FROM(
 SELECT plan_id, 
        start_date,
@@ -60,7 +64,8 @@ WHERE start_date <= '2020-12-31') t
 JOIN #plans p
   ON t.plan_id = p.plan_id
 WHERE plan_order = 1
-GROUP BY p.plan_name
+GROUP BY p.plan_name, p.plan_id
+ORDER BY p.plan_id
 
 -- 8. How many customers have upgraded to an annual plan in 2020?
 SELECT plan_id,
@@ -76,7 +81,7 @@ FROM(
 SELECT s.customer_id,
        s.start_date AS cus_start_date,
 	   t.start_date AS annual_start_date,
-	   DATEDIFF(DAY, s.start_date, t.start_date) AS day_to_sub
+	   CAST(DATEDIFF(DAY, s.start_date, t.start_date) * 1.0 AS decimal(5,2)) AS day_to_sub
 FROM #subscriptions s
 JOIN (SELECT customer_id,
              start_date
@@ -86,6 +91,35 @@ JOIN (SELECT customer_id,
 WHERE plan_id = 0) a
 
 -- 10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
+WITH 
+trial_plan AS (
+SELECT customer_id,
+       start_date AS cus_start_date
+FROM #subscriptions
+WHERE plan_id = 0
+),
+annual_plan AS (
+SELECT customer_id,
+       start_date AS annual_start_date
+FROM #subscriptions
+WHERE plan_id = 3
+),
+buckets AS (
+SELECT t.customer_id,
+       cus_start_date,
+	   annual_start_date,
+	   DATEDIFF(DAY, cus_start_date,  annual_start_date) / 30 + 1 AS bucket
+FROM trial_plan t
+JOIN annual_plan a
+  ON t.customer_id = a.customer_id
+)
+
+SELECT CASE WHEN bucket = 1 THEN CONCAT(bucket-1, ' - ', bucket * 30, ' days')
+            ELSE CONCAT((bucket-1) * 30 + 1, ' - ', bucket * 30, ' days') END AS cus_group,
+       COUNT(DISTINCT customer_id) AS customer_count,
+	   CAST(AVG(DATEDIFF(DAY, cus_start_date, annual_start_date) * 1.0) AS decimal(5,2)) AS day_to_sub
+FROM buckets
+GROUP BY bucket
 
 -- 11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
 SELECT SUM(downgrade) AS downgrade_cus
